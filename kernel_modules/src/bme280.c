@@ -24,8 +24,54 @@ struct i2c_client * client;
 //Set bit 7:5 to b'101
 #define REG_F4_SET      ( (5 << 5) | (3 << 0) )
 
+/******************************************************************************
+*
+******************************************************************************/
+unsigned short convert_to_unsigned(unsigned short num)
+{
+    if( num > 32767)
+    {
+        return num - 65536;
+    }
+    else
+    {
+        return num;
+    }
+}
 
-short read_register_data(struct i2c_client *client, char *tx_buf, char *rx_buf, int data_len)
+/******************************************************************************
+*
+******************************************************************************/
+void delay(void)
+{
+    for(int i = 0; i < 5000000; i++);
+}
+
+/******************************************************************************
+*
+******************************************************************************/
+int get_temperature(int adc_t, unsigned short dig_t1, unsigned short dig_t2, unsigned short dig_t3)
+{
+	unsigned int    var1, var2, t_fine;
+	int             temp_celcius, temp_farenheit;
+
+	var1 = ( ( ( ( adc_t >> 3 ) - ( ( unsigned int ) dig_t1 << 1 ) ) ) * ( (unsigned int) dig_t2)) >> 11;
+	var2 = ( ( ( ( ( adc_t >> 4 ) - ( ( unsigned int ) dig_t1) ) * (( adc_t >> 4) - ( (unsigned int) dig_t1 ))) >> 12) * ((unsigned int) dig_t3)) >> 14;
+
+	t_fine = var1 + var2;
+
+	//Temperature is in Celcius and is off by 100.
+	temp_celcius = ( t_fine * 5 + 128) >> 8;
+	temp_farenheit 	= ((temp_celcius * 9)/5) + 32 * 100;
+
+
+	return temp_farenheit;
+}
+
+/******************************************************************************
+*
+******************************************************************************/
+unsigned short read_register_data(struct i2c_client *client, char *tx_buf, char *rx_buf, int data_len)
 {
     if (i2c_master_send(client, tx_buf, 1) < 0)
     {
@@ -42,6 +88,9 @@ short read_register_data(struct i2c_client *client, char *tx_buf, char *rx_buf, 
 
 }
 
+/******************************************************************************
+*
+******************************************************************************/
 int my_init(void)
 {
     printk("BME280 kernel initialize...\n");
@@ -75,35 +124,71 @@ int my_init(void)
     
     printk("Configure registers...\n");
     
-    int array_length = sizeof(setup_reg_data);    
-    int err_bytes_written = i2c_master_send(client, setup_reg_data, array_length);
+    int array_length        = sizeof(setup_reg_data);    
+    int err_bytes_written   = i2c_master_send(client, setup_reg_data, array_length);
     
 
     printk("Get calibration data...\n");
 
-    char recv_buf[2]    = {0,10};
-    char reg_addr       = 0x88;
-    int recv_buf_size   = sizeof(recv_buf) / sizeof(recv_buf[0]);
+    char recv_buf[2]        = {0,10};
+    char reg_addr           = 0x88;
+    int recv_buf_size       = sizeof(recv_buf) / sizeof(recv_buf[0]);
 
-    short dig_t1 = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+    unsigned short dig_t1   = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
     printk("Buffer contents: 0x%hx\n", dig_t1);
     
 
     reg_addr   = 0x8A;
 
-    short dig_t2 = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+    unsigned short dig_t2   = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+    dig_t2                  = convert_to_unsigned(dig_t2);
     printk("Buffer contents: 0x%hx\n", dig_t2);
 
 
     reg_addr   = 0x8C;
 
-    short dig_t3 = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+    unsigned short dig_t3   = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+    dig_t3                  = convert_to_unsigned(dig_t3);
     printk("Buffer contents: 0x%hx\n", dig_t3);
 
 
+    //Show temperature
+    int raw_reg_temp;
+    int temperature;
+
+    int count = 10;
+
+    while (count > 0)
+    {
+        printk("Read temperature from register...\n");
+        
+        reg_addr            = 0xFA;
+        char d1             = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+        
+        reg_addr            = 0xFB;
+        char d2             = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+        
+        reg_addr            = 0xFC;
+        char d3             = read_register_data(client, &reg_addr, recv_buf, recv_buf_size);
+
+        //d3[0:3] is not valid so adjustment is made
+        raw_reg_temp        = ( (d1 << 16) | (d2 << 8) | d3 ) >> 4;
+
+        temperature         = get_temperature(raw_reg_temp, dig_t1, dig_t2, dig_t3);
+
+        printk("Temperature (F) = %d.%d\n", temperature / 100, temperature % 100);
+        
+        count--;
+        delay();
+
+    }
+    
     return 0;
 }
 
+/******************************************************************************
+*
+******************************************************************************/
 void my_exit(void)
 {
     printk("BME280 kernel exit...\n");
